@@ -1,54 +1,76 @@
 import socket
 import json
 import time
+import random
 
-# Configurações de conexão (devem bater com as do Master)
 MASTER_HOST = '127.0.0.1'
 MASTER_PORT = 5000
-SERVER_UUID_TARGET = "Master_A"
+
+WORKER_UUID = "W-123"
+# SERVER_UUID = "Master-B" # Descomente esta linha para testar o CT02 (Worker Emprestado)
 
 def start_worker():
     while True:
         print("\n[*] Tentando conectar ao Master...")
         try:
-            # Inicia conexão TCP [cite: 80]
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((MASTER_HOST, MASTER_PORT))
-                print("[+] Conectado ao Master com sucesso.")
+                s.settimeout(5.0) # Timeout rigoroso de 5 segundos estipulado pelo projeto
+                print("[+] Conectado ao Master.")
                 
-                # Loop de Heartbeat enquanto a conexão estiver ativa [cite: 84]
                 while True:
-                    # Monta o payload do Worker [cite: 70]
+                    # 1. Apresentação e Pedido de Tarefa
                     payload = {
-                        "SERVER_UUID": SERVER_UUID_TARGET,
-                        "TASK": "HEARTBEAT"
+                        "WORKER": "ALIVE",
+                        "WORKER_UUID": WORKER_UUID
                     }
-                    
-                    # Envia o JSON com \n no final [cite: 67]
-                    message = json.dumps(payload) + '\n'
-                    s.sendall(message.encode('utf-8'))
-                    
-                    # Aguarda a resposta do Master
-                    data = s.recv(1024)
-                    if not data:
-                        # Se não recebeu dados, a conexão caiu
-                        raise ConnectionResetError("Conexão fechada pelo servidor")
-                    
-                    # Faz o parse da resposta
-                    response_str = data.decode('utf-8').strip()
-                    response_json = json.loads(response_str)
-                    
-                    # Verifica se o status é ALIVE e faz o log [cite: 82, 95]
-                    if response_json.get("RESPONSE") == "ALIVE":
-                        print("Status: ALIVE")
-                    
-                    # Aguarda 10 segundos para o próximo Heartbeat [cite: 77]
-                    time.sleep(10)
+                    # Adiciona campo opcional se for emprestado
+                    if 'SERVER_UUID' in globals():
+                         payload["SERVER_UUID"] = SERVER_UUID
+                         
+                    s.sendall((json.dumps(payload) + '\n').encode('utf-8'))
 
-        except (ConnectionRefusedError, ConnectionResetError, socket.error):
-            # Se a conexão falhar, entra no fluxo de reconexão previsto no diagrama [cite: 96, 98]
-            print("Status: OFFLINE - Tentando Reconectar")
-            time.sleep(10) # Aguarda antes de tentar reconectar [cite: 99]
+                    # 2. Recebendo Tarefa do Master
+                    data = s.recv(1024)
+                    if not data: raise ConnectionResetError()
+                    response = json.loads(data.decode('utf-8').strip())
+
+                    # Processando a tarefa
+                    if response.get("TASK") == "QUERY":
+                        user = response.get("USER")
+                        print(f"[*] Tarefa recebida: QUERY para o usuário '{user}'. Processando...")
+                        
+                        time.sleep(random.uniform(1, 3)) # Simula o processamento
+                        
+                        status_result = "OK" # Altere para "NOK" temporariamente para testar o CT05
+                        
+                        # 3. Reporte de Status
+                        status_payload = {
+                            "STATUS": status_result,
+                            "TASK": "QUERY",
+                            "WORKER_UUID": WORKER_UUID
+                        }
+                        s.sendall((json.dumps(status_payload) + '\n').encode('utf-8'))
+                        
+                        # 4. Confirmação Final (ACK)
+                        ack_data = s.recv(1024)
+                        if not ack_data: raise ConnectionResetError()
+                        ack_response = json.loads(ack_data.decode('utf-8').strip())
+                        
+                        if ack_response.get("STATUS") == "ACK":
+                            print("[+] ACK recebido do Master. Ciclo concluído com sucesso.")
+
+                    elif response.get("TASK") == "NO_TASK":
+                        print("[-] Fila vazia (NO_TASK). Aguardando próximo ciclo...")
+                    
+                    time.sleep(4) # Pausa antes de pedir outra tarefa para não floodar o terminal
+
+        except socket.timeout:
+            print("[!] Timeout: O Master demorou mais de 5 segundos. Reconectando...")
+            time.sleep(2)
+        except (ConnectionRefusedError, ConnectionResetError):
+            print("[!] Status: OFFLINE - Tentando Reconectar...")
+            time.sleep(5)
 
 if __name__ == "__main__":
     start_worker()
