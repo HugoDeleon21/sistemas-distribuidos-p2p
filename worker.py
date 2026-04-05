@@ -7,7 +7,7 @@ MASTER_HOST = '127.0.0.1'
 MASTER_PORT = 5000
 
 WORKER_UUID = "W-123"
-# SERVER_UUID = "Master-B" # Descomente esta linha para testar o CT02 (Worker Emprestado)
+SERVER_UUID = None  # None significa que é um Worker Local. Para testar o CT02, mude None para "Master-B"
 
 def start_worker():
     while True:
@@ -24,8 +24,8 @@ def start_worker():
                         "WORKER": "ALIVE",
                         "WORKER_UUID": WORKER_UUID
                     }
-                    # Adiciona campo opcional se for emprestado
-                    if 'SERVER_UUID' in globals():
+                    # Adiciona campo opcional se for emprestado (Pylance aprova)
+                    if SERVER_UUID is not None:
                          payload["SERVER_UUID"] = SERVER_UUID
                          
                     s.sendall((json.dumps(payload) + '\n').encode('utf-8'))
