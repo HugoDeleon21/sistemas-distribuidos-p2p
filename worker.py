@@ -3,20 +3,22 @@ import json
 import time
 import random
 
-MASTER_HOST = '127.0.0.1'
+# ATENÇÃO: Mude este IP para o Endereço IPv4 da máquina Master no laboratório
+MASTER_HOST = '10.62.217.39' 
 MASTER_PORT = 5000
 
-WORKER_UUID = "W-123"
-SERVER_UUID = None  # None significa que é um Worker Local. Para testar o CT02, mude None para "Master-B"
+# Gera um ID aleatório para cada Worker que for iniciado
+WORKER_UUID = f"W-{random.randint(100, 999)}"
+SERVER_UUID = "MASTER_5" 
 
 def start_worker():
     while True:
-        print("\n[*] Tentando conectar ao Master...")
+        print(f"\n[*] Worker {WORKER_UUID} tentando conectar ao Master...")
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((MASTER_HOST, MASTER_PORT))
                 s.settimeout(5.0) # Timeout rigoroso de 5 segundos estipulado pelo projeto
-                print("[+] Conectado ao Master.")
+                print(f"[+] Conectado ao Master em {MASTER_HOST}.")
                 
                 while True:
                     # 1. Apresentação e Pedido de Tarefa

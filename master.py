@@ -3,15 +3,17 @@ import threading
 import json
 import queue
 
-HOST = '127.0.0.1'
+HOST = '0.0.0.0'
 PORT = 5000
+SERVER_UUID = "MASTER_5"
 
 # Criando a fila de tarefas do Master
 task_queue = queue.Queue()
+workers_na_farm = {}
 
-# Adicionando tarefas mockadas para os testes CT01 e CT02
-task_queue.put({"TASK": "QUERY", "USER": "Michel"})
-task_queue.put({"TASK": "QUERY", "USER": "Hugo"})
+# Adicionando tarefas mockadas com os novos nomes
+task_queue.put({"TASK": "QUERY", "USER": "Hugo1"})
+task_queue.put({"TASK": "QUERY", "USER": "Hugo2"})
 
 def handle_worker(conn, addr):
     print(f"[+] Worker conectado: {addr}")
@@ -43,8 +45,11 @@ def handle_worker(conn, addr):
                             print("[-] Erro: WORKER_UUID ausente na apresentação.")
                             continue
                             
-                        server_uuid = payload.get("SERVER_UUID", "Local")
-                        print(f"[*] Apresentação recebida do Worker {worker_uuid} (Origem: {server_uuid})")
+                        server_uuid_origem = payload.get("SERVER_UUID", "Local")
+                        print(f"[*] Apresentação recebida do Worker {worker_uuid} (Origem: {server_uuid_origem})")
+                        if worker_uuid not in workers_na_farm:
+                            workers_na_farm[worker_uuid] = addr
+                            print(f"[FARM] Lista de Workers ativos no momento: {list(workers_na_farm.keys())}")
 
                         # Verifica se há tarefas na fila
                         if not task_queue.empty():
@@ -87,7 +92,7 @@ def start_master():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.bind((HOST, PORT))
         server.listen()
-        print(f"[*] Master escutando na porta {PORT}...")
+        print(f"[*] {SERVER_UUID} escutando na porta {PORT}...")
         
         while True:
             conn, addr = server.accept()
