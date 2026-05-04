@@ -11,9 +11,9 @@ SERVER_UUID = "MASTER_5"
 task_queue = queue.Queue()
 workers_na_farm = {}
 
-# Adicionando tarefas mockadas com os novos nomes
-task_queue.put({"TASK": "QUERY", "USER": "Hugo1"})
-task_queue.put({"TASK": "QUERY", "USER": "Hugo2"})
+# Adicionando 60 tarefas mockadas automaticamente
+for i in range(1, 61):
+    task_queue.put({"TASK": "QUERY", "USER": f"Hugo{i}"})
 
 def handle_worker(conn, addr):
     print(f"[+] Worker conectado: {addr}")

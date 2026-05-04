@@ -6,7 +6,7 @@ import shutil
 import master # Importa o seu código do Master para podermos acioná-lo depois!
 
 # ATENÇÃO: IP do Notebook
-MASTER_HOST = '192.168.18.20' 
+MASTER_HOST = '10.62.217.39' 
 MASTER_PORT = 5000
 ELECTION_PORT = 5001
 
@@ -118,7 +118,7 @@ def start_worker():
                     if response.get("TASK") == "QUERY":
                         user = response.get("USER")
                         print(f"[*] Tarefa recebida: QUERY para o usuário '{user}'. Processando...")
-                        time.sleep(random.uniform(1, 3)) 
+                        time.sleep(random.uniform(8, 12)) 
                         
                         status_payload = {"STATUS": "OK", "TASK": "QUERY", "WORKER_UUID": WORKER_UUID}
                         s.sendall((json.dumps(status_payload) + '\n').encode('utf-8'))
