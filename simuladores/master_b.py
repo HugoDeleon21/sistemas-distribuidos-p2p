@@ -6,7 +6,7 @@ import time
 import uuid
 
 HOST = '0.0.0.0'
-PORT = 5000
+PORT = 5001
 MASTER_ID = "MASTER_5"
 SERVER_UUID = MASTER_ID
 MASTER_ADDRESS = "127.0.0.1:5000"
@@ -24,7 +24,7 @@ neighbors = {"MASTER_VIZINHO": "127.0.0.1:5001"}
 load_lock = threading.Lock()
 
 # Adicionando 60 tarefas mockadas automaticamente
-for i in range(1, 150):
+for i in range(0):
     task_queue.put({"TASK": "QUERY", "USER": f"Hugo{i}"})
 
 def send_json(conn, payload):
@@ -57,9 +57,7 @@ def handle_connection(conn, addr):
             print(f"[-] Conexão fechada antes da primeira mensagem: {addr}")
             return
 
-        if initial_payload.get("type") == "register_temporary_worker":
-            handle_worker_connection(conn, addr, initial_payload, buffer)
-        elif initial_payload.get("WORKER") == "ALIVE" or ("WORKER_UUID" in initial_payload and "type" not in initial_payload):
+        if initial_payload.get("WORKER") == "ALIVE" or ("WORKER_UUID" in initial_payload and "type" not in initial_payload):
             handle_worker_connection(conn, addr, initial_payload, buffer)
         elif "type" in initial_payload:
             handle_master_connection(conn, addr, initial_payload, buffer)
@@ -364,7 +362,7 @@ def start_master():
     monitor_thread.start()
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-        server.bind((HOST, 5000))
+        server.bind((HOST, PORT))
         server.listen()
         print(f"[*] {SERVER_UUID} escutando na porta {PORT}...")
         

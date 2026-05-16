@@ -6,8 +6,8 @@ import shutil
 import master # Importa o seu código do Master para podermos acioná-lo depois!
 
 # ATENÇÃO: IP do Notebook
-MASTER_HOST = '10.62.217.39' 
-MASTER_PORT = 5000
+MASTER_HOST = '127.0.0.1' 
+MASTER_PORT = 5001
 ELECTION_PORT = 5001
 
 WORKER_UUID = f"W-{random.randint(100, 999)}"
@@ -21,7 +21,7 @@ def get_local_ip():
     """Descobre o próprio IP na rede (Versão Blindada para Windows)"""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect((MASTER_HOST, 5000)) # Finge conectar no master só para o Windows decidir a placa de rede
+        s.connect((MASTER_HOST, MASTER_PORT)) # Finge conectar no master só para o Windows decidir a placa de rede
         ip = s.getsockname()[0]
         s.close()
         return ip
@@ -90,8 +90,31 @@ def hold_election():
         print(f"\n[ELECTION] Fui derrotado. O novo Master é o {winner_uuid} no IP {winner_ip}.")
         return False, winner_ip
 
+def send_json(sock, payload):
+    """Envia um JSON delimitado por newline."""
+    sock.sendall((json.dumps(payload) + '\n').encode('utf-8'))
+
+
+def receive_json(sock):
+    """Recebe um JSON delimitado por newline."""
+    buffer = ""
+    while True:
+        data = sock.recv(1024)
+        if not data:
+            return None
+        buffer += data.decode('utf-8')
+        if '\n' in buffer:
+            message, _ = buffer.split('\n', 1)
+            if message.strip():
+                try:
+                    return json.loads(message)
+                except json.JSONDecodeError:
+                    continue
+    return None
+
+
 def start_worker():
-    global MASTER_HOST
+    global MASTER_HOST, SERVER_UUID
     connection_errors = 0
 
     while True:
@@ -109,11 +132,91 @@ def start_worker():
                     if SERVER_UUID is not None:
                          payload["SERVER_UUID"] = SERVER_UUID
                          
-                    s.sendall((json.dumps(payload) + '\n').encode('utf-8'))
+                    send_json(s, payload)
 
-                    data = s.recv(1024)
-                    if not data: raise ConnectionResetError()
-                    response = json.loads(data.decode('utf-8').strip())
+                    response = receive_json(s)
+                    if response is None:
+                        raise ConnectionResetError()
+
+                    # Verificar se é um comando de redirecionamento
+                    if response.get("type") == "command_redirect":
+                        new_master_addr = response.get("payload", {}).get("new_master_address")
+                        print(f"[REDIRECT] Recebido comando de redirecionamento para {new_master_addr}")
+                        
+                        # Encerrar conexão atual
+                        print(f"[REDIRECT] Encerrando conexão com Master atual...")
+                        s.close()
+                        
+                        # Extrair IP e porta do novo Master
+                        try:
+                            new_ip, new_port_str = new_master_addr.split(":")
+                            new_port = int(new_port_str)
+                        except Exception as e:
+                            print(f"[ERRO] Endereço de novo Master inválido {new_master_addr}: {e}")
+                            break
+                        
+                        # Conectar ao novo Master
+                        print(f"[REDIRECT] Conectando ao novo Master em {new_ip}:{new_port}...")
+                        try:
+                            new_sock = socket.create_connection((new_ip, new_port), timeout=5)
+                            new_sock.settimeout(5.0)
+                        except Exception as e:
+                            print(f"[ERRO] Falha ao conectar ao novo Master: {e}")
+                            break
+                        
+                        # Enviar register_temporary_worker
+                        original_master_address = f"{MASTER_HOST}:{MASTER_PORT}"
+                        reg_payload = {
+                            "type": "register_temporary_worker",
+                            "request_id": str(random.randint(100000, 999999)),
+                            "payload": {
+                                "worker_id": WORKER_UUID,
+                                "original_master_address": original_master_address
+                            }
+                        }
+                        
+                        print(f"[REDIRECT] Enviando register_temporary_worker ao novo Master...")
+                        send_json(new_sock, reg_payload)
+                        
+                        # Receber confirmação (idealmente um ACK ou similar)
+                        ack = receive_json(new_sock)
+                        print(f"[REDIRECT] Resposta do novo Master: {ack}")
+                        
+                        # Continuar o protocolo normal com o novo socket
+                        s = new_sock
+                        continue
+
+                    elif response.get("type") == "command_release":
+                        origin_address = response.get("payload", {}).get("original_master_address")
+                        print(f"[RELEASE] Recebido command_release para retornar a {origin_address}")
+                        
+                        if not origin_address:
+                            print("[ERRO] original_master_address ausente no command_release")
+                            break
+                        
+                        print(f"[RELEASE] Encerrando conexão com Master atual...")
+                        s.close()
+                        
+                        try:
+                            origin_ip, origin_port_str = origin_address.split(":")
+                            origin_port = int(origin_port_str)
+                        except Exception as e:
+                            print(f"[ERRO] Endereço do Master de origem inválido {origin_address}: {e}")
+                            break
+                        
+                        print(f"[RELEASE] Conectando de volta ao Master de origem em {origin_ip}:{origin_port}...")
+                        try:
+                            return_sock = socket.create_connection((origin_ip, origin_port), timeout=5)
+                            return_sock.settimeout(5.0)
+                        except Exception as e:
+                            print(f"[ERRO] Falha ao reconectar ao Master de origem: {e}")
+                            break
+                        
+                        MASTER_HOST = origin_ip
+                        SERVER_UUID = None
+                        
+                        s = return_sock
+                        continue
 
                     if response.get("TASK") == "QUERY":
                         user = response.get("USER")
@@ -121,11 +224,11 @@ def start_worker():
                         time.sleep(random.uniform(8, 12)) 
                         
                         status_payload = {"STATUS": "OK", "TASK": "QUERY", "WORKER_UUID": WORKER_UUID}
-                        s.sendall((json.dumps(status_payload) + '\n').encode('utf-8'))
+                        send_json(s, status_payload)
                         
-                        ack_data = s.recv(1024)
-                        if not ack_data: raise ConnectionResetError()
-                        ack_response = json.loads(ack_data.decode('utf-8').strip())
+                        ack_response = receive_json(s)
+                        if ack_response is None:
+                            raise ConnectionResetError()
                         
                         if ack_response.get("STATUS") == "ACK":
                             print("[+] ACK recebido. Ciclo concluído.")

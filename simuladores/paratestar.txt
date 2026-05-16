@@ -1,0 +1,16 @@
+Abra 3 terminais no VS Code e execute os scripts na ordem abaixo:
+
+1. TERMINAL 1 (O Salvador)
+Inicie o Master B:
+> python simuladores/master_b.py
+Status esperado: O servidor iniciará na porta 5001, com carga 0, apenas aguardando.
+
+2. TERMINAL 2 (O Peão)
+Inicie o Worker:
+> python worker.py
+Status esperado: O Worker conectará ao Master B (Terminal 1) e ficará em loop aguardando tarefas (Fila vazia).
+
+3. TERMINAL 3 (O Desesperado)
+Inicie o Master A:
+> python master.py
+Status esperado: O servidor iniciará na porta 5000. O alarme de saturação vai disparar imediatamente devido à carga inicial.
