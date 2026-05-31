@@ -111,12 +111,17 @@ def receive_json(sock):
     """Recebe um JSON delimitado por newline."""
     buffer = ""
     while True:
-        data = sock.recv(1024)
+        try:
+            data = sock.recv(1024)
+        except socket.timeout:
+            # No data yet; keep waiting instead of bubbling timeout to caller
+            time.sleep(0.1)
+            continue
         if not data:
             return None
         buffer += data.decode('utf-8')
         if '\n' in buffer:
-            message, _ = buffer.split('\n', 1)
+            message, buffer = buffer.split('\n', 1)
             if message.strip():
                 try:
                     return json.loads(message)
@@ -134,7 +139,7 @@ def start_worker():
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((MASTER_HOST, MASTER_PORT))
-                s.settimeout(5.0)
+                s.settimeout(10.0)
 
                 connection_errors = 0
                 print(f"[+] Conectado ao Master {MASTER_HOST}:{MASTER_PORT}!")
@@ -173,8 +178,8 @@ def start_worker():
                         # Conectar ao novo Master
                         print(f"[REDIRECT] Conectando ao novo Master em {new_ip}:{new_port}...")
                         try:
-                            new_sock = socket.create_connection((new_ip, new_port), timeout=5)
-                            new_sock.settimeout(5.0)
+                            new_sock = socket.create_connection((new_ip, new_port), timeout=10)
+                            new_sock.settimeout(10.0)
                         except Exception as e:
                             print(f"[ERRO] Falha ao conectar ao novo Master: {e}")
                             break
@@ -222,8 +227,8 @@ def start_worker():
 
                         print(f"[RELEASE] Conectando de volta ao Master de origem em {origin_ip}:{origin_port}...")
                         try:
-                            return_sock = socket.create_connection((origin_ip, origin_port), timeout=5)
-                            return_sock.settimeout(5.0)
+                            return_sock = socket.create_connection((origin_ip, origin_port), timeout=10)
+                            return_sock.settimeout(10.0)
                         except Exception as e:
                             print(f"[ERRO] Falha ao reconectar ao Master de origem: {e}")
                             break

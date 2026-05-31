@@ -110,8 +110,9 @@ def handle_worker_connection(conn, addr, initial_payload, buffer):
                     with load_lock:
                         borrowed_workers[worker_id] = original_master_address
                         print(f"[BORROW] Worker {worker_id} registrado como emprestado de {original_master_address}")
-                        print_worker_counts()
-                    
+        
+                    print_worker_counts() # <- Movi para fora (alinhei com a margem esquerda do with)
+        
                     is_borrowed_worker = True
                     borrowed_worker_origin = original_master_address
                     
