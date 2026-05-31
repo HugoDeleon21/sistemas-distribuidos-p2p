@@ -3,6 +3,7 @@ import json
 import time
 import random
 import shutil
+import uuid
 import master # Importa o seu código do Master para podermos acioná-lo depois!
 
 # ATENÇÃO: IP do Notebook
@@ -11,7 +12,9 @@ MASTER_PORT = 5001
 ELECTION_PORT = 5001
 
 WORKER_UUID = f"W-{random.randint(100, 999)}"
-SERVER_UUID = "MASTER_5" 
+SERVER_UUID = None
+ORIGINAL_MASTER_ADDRESS = None
+IS_BORROWED = False
 
 def get_free_disk():
     """Retorna o espaço livre no HD atual em bytes"""
@@ -27,6 +30,15 @@ def get_local_ip():
         return ip
     except:
         return socket.gethostbyname(socket.gethostname())
+
+
+def parse_host_port(address):
+    try:
+        ip, port_str = address.split(":")
+        return ip, int(port_str)
+    except Exception:
+        return None, None
+
 
 def hold_election():
     """Executa o Algoritmo do Valentão via UDP Broadcast (Com Desempate)"""
@@ -114,24 +126,24 @@ def receive_json(sock):
 
 
 def start_worker():
-    global MASTER_HOST, SERVER_UUID
+    global MASTER_HOST, MASTER_PORT, SERVER_UUID, ORIGINAL_MASTER_ADDRESS, IS_BORROWED
     connection_errors = 0
 
     while True:
-        print(f"\n[*] Worker {WORKER_UUID} tentando conectar ao Master em {MASTER_HOST}...")
+        print(f"\n[*] Worker {WORKER_UUID} tentando conectar ao Master em {MASTER_HOST}:{MASTER_PORT}...")
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.connect((MASTER_HOST, MASTER_PORT))
-                s.settimeout(5.0) 
-                
-                connection_errors = 0 
-                print(f"[+] Conectado ao Master!")
-                
+                s.settimeout(5.0)
+
+                connection_errors = 0
+                print(f"[+] Conectado ao Master {MASTER_HOST}:{MASTER_PORT}!")
+
                 while True:
                     payload = {"WORKER": "ALIVE", "WORKER_UUID": WORKER_UUID}
                     if SERVER_UUID is not None:
-                         payload["SERVER_UUID"] = SERVER_UUID
-                         
+                        payload["SERVER_UUID"] = SERVER_UUID
+
                     send_json(s, payload)
 
                     response = receive_json(s)
@@ -142,19 +154,22 @@ def start_worker():
                     if response.get("type") == "command_redirect":
                         new_master_addr = response.get("payload", {}).get("new_master_address")
                         print(f"[REDIRECT] Recebido comando de redirecionamento para {new_master_addr}")
-                        
+
+                        original_master_address = f"{MASTER_HOST}:{MASTER_PORT}"
+                        SERVER_UUID = original_master_address
+                        ORIGINAL_MASTER_ADDRESS = original_master_address
+                        IS_BORROWED = True
+
                         # Encerrar conexão atual
-                        print(f"[REDIRECT] Encerrando conexão com Master atual...")
+                        print(f"[REDIRECT] Encerrando conexão com Master atual {MASTER_HOST}:{MASTER_PORT}...")
                         s.close()
-                        
+
                         # Extrair IP e porta do novo Master
-                        try:
-                            new_ip, new_port_str = new_master_addr.split(":")
-                            new_port = int(new_port_str)
-                        except Exception as e:
-                            print(f"[ERRO] Endereço de novo Master inválido {new_master_addr}: {e}")
+                        new_ip, new_port = parse_host_port(new_master_addr)
+                        if not new_ip or not new_port:
+                            print(f"[ERRO] Endereço de novo Master inválido {new_master_addr}")
                             break
-                        
+
                         # Conectar ao novo Master
                         print(f"[REDIRECT] Conectando ao novo Master em {new_ip}:{new_port}...")
                         try:
@@ -163,47 +178,48 @@ def start_worker():
                         except Exception as e:
                             print(f"[ERRO] Falha ao conectar ao novo Master: {e}")
                             break
-                        
+
                         # Enviar register_temporary_worker
-                        original_master_address = f"{MASTER_HOST}:{MASTER_PORT}"
                         reg_payload = {
                             "type": "register_temporary_worker",
-                            "request_id": str(random.randint(100000, 999999)),
+                            "request_id": str(uuid.uuid4()),
                             "payload": {
                                 "worker_id": WORKER_UUID,
                                 "original_master_address": original_master_address
                             }
                         }
-                        
+
                         print(f"[REDIRECT] Enviando register_temporary_worker ao novo Master...")
                         send_json(new_sock, reg_payload)
-                        
+
                         # Receber confirmação (idealmente um ACK ou similar)
                         ack = receive_json(new_sock)
                         print(f"[REDIRECT] Resposta do novo Master: {ack}")
-                        
-                        # Continuar o protocolo normal com o novo socket
+                        if ack is None:
+                            print("[ERRO] Nenhuma confirmação recebida do novo Master após register_temporary_worker.")
+                            break
+
+                        MASTER_HOST = new_ip
+                        MASTER_PORT = new_port
                         s = new_sock
                         continue
 
                     elif response.get("type") == "command_release":
                         origin_address = response.get("payload", {}).get("original_master_address")
                         print(f"[RELEASE] Recebido command_release para retornar a {origin_address}")
-                        
+
                         if not origin_address:
                             print("[ERRO] original_master_address ausente no command_release")
                             break
-                        
+
                         print(f"[RELEASE] Encerrando conexão com Master atual...")
                         s.close()
-                        
-                        try:
-                            origin_ip, origin_port_str = origin_address.split(":")
-                            origin_port = int(origin_port_str)
-                        except Exception as e:
-                            print(f"[ERRO] Endereço do Master de origem inválido {origin_address}: {e}")
+
+                        origin_ip, origin_port = parse_host_port(origin_address)
+                        if not origin_ip or not origin_port:
+                            print(f"[ERRO] Endereço do Master de origem inválido {origin_address}")
                             break
-                        
+
                         print(f"[RELEASE] Conectando de volta ao Master de origem em {origin_ip}:{origin_port}...")
                         try:
                             return_sock = socket.create_connection((origin_ip, origin_port), timeout=5)
@@ -211,10 +227,13 @@ def start_worker():
                         except Exception as e:
                             print(f"[ERRO] Falha ao reconectar ao Master de origem: {e}")
                             break
-                        
+
                         MASTER_HOST = origin_ip
+                        MASTER_PORT = origin_port
                         SERVER_UUID = None
-                        
+                        ORIGINAL_MASTER_ADDRESS = None
+                        IS_BORROWED = False
+
                         s = return_sock
                         continue
 
@@ -242,22 +261,44 @@ def start_worker():
         except Exception as e:
             connection_errors += 1
             print(f"[!] Falha de conexão. Erro {connection_errors}/4. ({type(e).__name__})")
-            
+
+            if IS_BORROWED and ORIGINAL_MASTER_ADDRESS:
+                print(f"[RECOVER] Perda de conexão com Master atual. Tentando reconectar ao Master original {ORIGINAL_MASTER_ADDRESS}...")
+                origin_ip, origin_port = parse_host_port(ORIGINAL_MASTER_ADDRESS)
+                if origin_ip and origin_port:
+                    try:
+                        with socket.create_connection((origin_ip, origin_port), timeout=5) as retry_sock:
+                            pass
+                        MASTER_HOST = origin_ip
+                        MASTER_PORT = origin_port
+                        SERVER_UUID = None
+                        IS_BORROWED = False
+                        ORIGINAL_MASTER_ADDRESS = None
+                        connection_errors = 0
+                        print(f"[RECOVER] Reconexão ao Master original bem-sucedida: {MASTER_HOST}:{MASTER_PORT}")
+                        time.sleep(2)
+                        continue
+                    except Exception as retry_error:
+                        print(f"[RECOVER] Falha ao reconectar ao Master original: {retry_error}")
+
             if connection_errors >= 4:
                 is_master, new_master_ip = hold_election()
-                
+
                 if is_master:
                     print("[*] Iniciando a metamorfose: Deixando de ser Worker para virar Master...\n")
                     master.SERVER_UUID = f"NOVO_MASTER_{WORKER_UUID}"
-                    master.start_master() 
-                    break 
+                    master.start_master()
+                    break
                 else:
                     print(f"[*] Atualizando rota para o novo Master: {new_master_ip}")
                     MASTER_HOST = new_master_ip
-                    connection_errors = 0 
+                    SERVER_UUID = None
+                    ORIGINAL_MASTER_ADDRESS = None
+                    IS_BORROWED = False
+                    connection_errors = 0
                     time.sleep(3)
             else:
-                time.sleep(2) 
+                time.sleep(2)
 
 if __name__ == "__main__":
     start_worker()

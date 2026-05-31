@@ -9,7 +9,7 @@ HOST = '0.0.0.0'
 PORT = 5000
 MASTER_ID = "MASTER_5"
 SERVER_UUID = MASTER_ID
-MASTER_ADDRESS = "127.0.0.1:5000"
+MASTER_ADDRESS = "192.168.18.248:5000" #Ip do pc que está com o master sobrecarregado
 CAPACITY = 100
 RELEASE_THRESHOLD = 60
 
@@ -19,7 +19,7 @@ workers_na_farm = {}
 worker_connections = {}  # Mapeia worker_uuid -> socket para envio de comandos
 borrowed_workers = {}
 pending_help_requests = {}
-neighbors = {"MASTER_VIZINHO": "127.0.0.1:5001"}
+neighbors = {"MASTER_VIZINHO": "192.168.18.20:5001"} #Ip do pc que está com o master vizinho, o pc que queremos pedir ajuda quando estivermos sobrecarregados
 
 load_lock = threading.Lock()
 
@@ -29,6 +29,29 @@ for i in range(1, 150):
 
 def send_json(conn, payload):
     conn.sendall((json.dumps(payload) + '\n').encode('utf-8'))
+
+
+def current_timestamp():
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime())
+
+
+def log_master_event(event_type, request_id=None, payload=None, extra=None):
+    ts = current_timestamp()
+    print(f"[{ts}] [MASTER_MSG] type={event_type} request_id={request_id} payload={payload} {extra or ''}")
+
+
+def print_worker_counts():
+    with load_lock:
+        local_count = len(workers_na_farm)
+        borrowed_count = len(borrowed_workers)
+    print(f"[STATE] Workers locais={local_count} emprestados={borrowed_count}")
+
+
+def get_worker_address(worker_uuid):
+    worker_addr = workers_na_farm.get(worker_uuid)
+    if isinstance(worker_addr, tuple) and len(worker_addr) == 2:
+        return f"{worker_addr[0]}:{worker_addr[1]}"
+    return None
 
 
 def receive_payload(conn, buffer):
@@ -87,7 +110,7 @@ def handle_worker_connection(conn, addr, initial_payload, buffer):
                     with load_lock:
                         borrowed_workers[worker_id] = original_master_address
                         print(f"[BORROW] Worker {worker_id} registrado como emprestado de {original_master_address}")
-                        print(f"[BORROW] Lista de Workers emprestados: {list(borrowed_workers.keys())}")
+                        print_worker_counts()
                     
                     is_borrowed_worker = True
                     borrowed_worker_origin = original_master_address
@@ -107,10 +130,10 @@ def handle_worker_connection(conn, addr, initial_payload, buffer):
                     server_uuid_origem = payload.get("SERVER_UUID", "Local")
                     print(f"[*] Apresentação recebida do Worker {worker_uuid} (Origem: {server_uuid_origem})")
                     with load_lock:
-                        if worker_uuid not in workers_na_farm:
-                            workers_na_farm[worker_uuid] = addr
-                            worker_connections[worker_uuid] = conn  # Registrar conexão para comandos
-                            print(f"[FARM] Lista de Workers ativos no momento: {list(workers_na_farm.keys())}")
+                        workers_na_farm[worker_uuid] = addr
+                        worker_connections[worker_uuid] = conn  # Registrar conexão para comandos
+                        print(f"[FARM] Lista de Workers ativos no momento: {list(workers_na_farm.keys())}")
+                        print_worker_counts()
 
                     if not task_queue.empty():
                         task = task_queue.get()
@@ -158,70 +181,110 @@ def handle_master_connection(conn, addr, initial_payload, buffer):
             request_id = payload.get("request_id")
 
             if message_type == "request_help":
-                print(f"[MASTER] request_help recebido de {addr} request_id={request_id} payload={payload.get('payload')}")
-                
-                requester_payload = payload.get("payload", {})
-                requesting_master = requester_payload.get("master_id", "UNKNOWN")
-                workers_needed = requester_payload.get("workers_needed", 1)
+                    request_payload = payload.get("payload", {})
+                    log_master_event("request_help", request_id, request_payload, extra=f"from={addr}")
 
-                with load_lock:
-                    current_load = task_queue.qsize()
+                    requesting_master = request_payload.get("master_id")
+                    requester_address = request_payload.get("master_address")
+                    current_load = request_payload.get("current_load")
+                    capacity = request_payload.get("capacity")
+                    workers_needed = request_payload.get("workers_needed")
 
-                if current_load < CAPACITY:
-                    print(f"[MASTER] Aceitando request_help de {requesting_master}: current_load={current_load} < capacity={CAPACITY}")
-                    
-                    # Selecionar Workers ociosos para oferecer
+                    if not requesting_master or not requester_address or current_load is None or capacity is None or workers_needed is None:
+                        print(f"[-] request_help inválido de {addr}: campos obrigatórios ausentes {request_payload}")
+                        response = {
+                            "type": "response_rejected",
+                            "request_id": request_id,
+                            "payload": {"reason": "refused"}
+                        }
+                        send_json(conn, response)
+                        payload, buffer = receive_payload(conn, buffer)
+                        continue
+
                     with load_lock:
-                        available_workers = list(workers_na_farm.keys())[:workers_needed]
-                    
-                    offered_workers_details = []
-                    for worker_uuid in available_workers:
-                        # Enviar command_redirect para cada worker
-                        try:
-                            redirect_payload = {
-                                "type": "command_redirect",
-                                "request_id": str(uuid.uuid4()),
+                        actual_load = task_queue.qsize()
+                        available_workers = [w for w in workers_na_farm.keys() if w not in borrowed_workers]
+
+                    if actual_load >= CAPACITY:
+                        print(f"[MASTER] Rejeitando request_help de {requesting_master}: current_load={actual_load} >= capacity={CAPACITY}")
+                        response = {
+                            "type": "response_rejected",
+                            "request_id": request_id,
+                            "payload": {"reason": "high_load"}
+                        }
+                    elif not available_workers:
+                        print(f"[MASTER] Rejeitando request_help de {requesting_master}: nenhum worker disponível")
+                        response = {
+                            "type": "response_rejected",
+                            "request_id": request_id,
+                            "payload": {"reason": "no_workers_available"}
+                        }
+                    else:
+                        selected_workers = available_workers[:workers_needed]
+                        offered_workers_details = []
+                        print(f"[MASTER] Aceitando request_help de {requesting_master}: current_load={actual_load} < capacity={CAPACITY}")
+
+                        for worker_uuid in selected_workers:
+                            try:
+                                with load_lock:
+                                    worker_conn = worker_connections.get(worker_uuid)
+                                    worker_addr = workers_na_farm.get(worker_uuid)
+
+                                if worker_conn:
+                                    redirect_payload = {
+                                        "type": "command_redirect",
+                                        "request_id": str(uuid.uuid4()),
+                                        "payload": {
+                                            "new_master_address": requester_address
+                                        }
+                                    }
+                                    print(f"[REDIRECT] Enviando command_redirect ao Worker {worker_uuid}")
+                                    send_json(worker_conn, redirect_payload)
+
+                                    offered_workers_details.append({
+                                        "id": worker_uuid,
+                                        "address": get_worker_address(worker_uuid) or "unknown"
+                                    })
+                                else:
+                                    print(f"[ERRO] Conexão do Worker {worker_uuid} não encontrada")
+                            except Exception as e:
+                                print(f"[ERRO] Falha ao enviar command_redirect ao Worker {worker_uuid}: {e}")
+
+                        if not offered_workers_details:
+                            response = {
+                                "type": "response_rejected",
+                                "request_id": request_id,
+                                "payload": {"reason": "no_workers_available"}
+                            }
+                        else:
+                            response = {
+                                "type": "response_accepted",
+                                "request_id": request_id,
                                 "payload": {
-                                    "new_master_address": requester_payload.get("master_address")
+                                    "workers_offered": len(offered_workers_details),
+                                    "worker_details": offered_workers_details
                                 }
                             }
-                            
-                            with load_lock:
-                                worker_conn = worker_connections.get(worker_uuid)
-                            
-                            if worker_conn:
-                                print(f"[REDIRECT] Enviando command_redirect ao Worker {worker_uuid}")
-                                send_json(worker_conn, redirect_payload)
-                                offered_workers_details.append({
-                                    "id": worker_uuid,
-                                    "address": f"127.0.0.1:5000"  # Seria o endereço real do worker
-                                })
-                        except Exception as e:
-                            print(f"[ERRO] Falha ao enviar command_redirect ao Worker {worker_uuid}: {e}")
-                    
-                    response = {
-                        "type": "response_accepted",
-                        "request_id": request_id,
-                        "payload": {
-                            "workers_offered": len(offered_workers_details),
-                            "worker_details": offered_workers_details
-                        }
-                    }
-                else:
-                    print(f"[MASTER] Rejeitando request_help de {requesting_master}: current_load={current_load} >= capacity={CAPACITY}")
-                    response = {
-                        "type": "response_rejected",
-                        "request_id": request_id,
-                        "payload": {"reason": "high_load"}
-                    }
 
-                send_json(conn, response)
-
+                    log_master_event(response["type"], request_id, response.get("payload"), extra=f"to={addr}")
+                    send_json(conn, response)
             elif message_type == "notify_worker_returned":
-                print(f"[MASTER] notify_worker_returned recebido de {addr} request_id={request_id} payload={payload.get('payload')}")
-                returned_worker_id = payload.get('payload', {}).get('worker_id')
-                print(f"[MASTER] Worker devolvido com sucesso: {returned_worker_id}")
+                notify_payload = payload.get('payload', {})
+                log_master_event("notify_worker_returned", request_id, notify_payload, extra=f"from={addr}")
+                returned_worker_id = notify_payload.get('worker_id')
+                if returned_worker_id:
+                    with load_lock:
+                        if returned_worker_id in borrowed_workers:
+                            borrowed_workers.pop(returned_worker_id, None)
+                            worker_connections.pop(returned_worker_id, None)
+                            print(f"[MASTER] Worker devolvido com sucesso: {returned_worker_id}")
+                            print_worker_counts()
+                        else:
+                            print(f"[MASTER] notify_worker_returned recebido para worker desconhecido: {returned_worker_id}")
+                else:
+                    print(f"[MASTER] notify_worker_returned recebido sem worker_id: {payload}")
             elif message_type in ["response_accepted", "response_rejected"]:
+                log_master_event(message_type, request_id, payload.get('payload'), extra=f"from={addr}")
                 print(f"[MASTER] Mensagem {message_type} recebida de {addr} request_id={request_id} payload={payload.get('payload')}")
             else:
                 print(f"[MASTER] Tipo desconhecido recebido de {addr}: {payload}")
@@ -286,14 +349,17 @@ def load_monitor_loop():
                             "request_id": str(uuid.uuid4()),
                             "payload": {"worker_id": worker_id}
                         }
+                        log_master_event("notify_worker_returned", notify_payload["request_id"], notify_payload["payload"], extra=f"to={origin_address}")
                         send_json(notify_sock, notify_payload)
                         print(f"[RELEASE] notify_worker_returned enviado para {origin_address} worker_id={worker_id}")
+
+                    with load_lock:
+                        borrowed_workers.pop(worker_id, None)
+                        worker_connections.pop(worker_id, None)
+                        print_worker_counts()
                 except Exception as e:
                     print(f"[ERRO] Falha ao notificar Master de origem {origin_address}: {e}")
-
-                with load_lock:
-                    borrowed_workers.pop(worker_id, None)
-                    worker_connections.pop(worker_id, None)
+                    print(f"[RELEASE] Worker {worker_id} permanecerá listado como emprestado até confirmação")
 
         else:
             print(f"[LOAD] Carga estável: current_load={current_load}")
@@ -325,8 +391,10 @@ def request_help_to_neighbor(neighbor_id, addr_str, workers_needed):
         }
     }
 
+    log_master_event("request_help", request_id, payload["payload"], extra=f"to={neighbor_id}")
     print(f"[HELP] Enviando request_help para {neighbor_id} ({addr_str}) request_id={request_id} workers_needed={workers_needed}")
 
+    response_received = False
     try:
         with socket.create_connection((ip, port), timeout=5) as s:
             s.settimeout(5.0)
@@ -345,7 +413,9 @@ def request_help_to_neighbor(neighbor_id, addr_str, workers_needed):
                         try:
                             resp = json.loads(message)
                             rtype = resp.get('type')
+                            log_master_event(rtype, resp.get('request_id'), resp.get('payload'), extra=f"from={neighbor_id}")
                             print(f"[HELP] Resposta de {neighbor_id}: type={rtype} request_id={resp.get('request_id')} payload={resp.get('payload')}")
+                            response_received = True
                             break
                         except json.JSONDecodeError:
                             continue
@@ -354,6 +424,9 @@ def request_help_to_neighbor(neighbor_id, addr_str, workers_needed):
 
     except Exception as e:
         print(f"[HELP] Falha ao conectar/comunicar com {neighbor_id} ({addr_str}): {e}")
+
+    if not response_received:
+        print(f"[HELP] Timeout de 5s aguardando resposta de {neighbor_id} ({addr_str})")
 
     with load_lock:
         pending_help_requests.pop(neighbor_id, None)
