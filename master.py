@@ -9,7 +9,7 @@ HOST = '0.0.0.0'
 PORT = 5000
 MASTER_ID = "MASTER_5"
 SERVER_UUID = MASTER_ID
-MASTER_ADDRESS = "192.168.18.248:5000" #Ip do pc que está com o master sobrecarregado
+MASTER_ADDRESS = "192.168.18.248:5000" #Coloque aqui o IP do computador que está rodando este arquivo.
 CAPACITY = 100
 RELEASE_THRESHOLD = 60
 
@@ -19,7 +19,7 @@ workers_na_farm = {}
 worker_connections = {}  # Mapeia worker_uuid -> socket para envio de comandos
 borrowed_workers = {}
 pending_help_requests = {}
-neighbors = {"MASTER_VIZINHO": "192.168.18.20:5001"} #Ip do pc que está com o master vizinho, o pc que queremos pedir ajuda quando estivermos sobrecarregados
+neighbors = {"MASTER_VIZINHO": "192.168.18.20:5001"} #Coloque aqui o IP e a porta do pc do outro grupo
 
 load_lock = threading.Lock()
 
@@ -134,7 +134,8 @@ def handle_worker_connection(conn, addr, initial_payload, buffer):
                         workers_na_farm[worker_uuid] = addr
                         worker_connections[worker_uuid] = conn  # Registrar conexão para comandos
                         print(f"[FARM] Lista de Workers ativos no momento: {list(workers_na_farm.keys())}")
-                        print_worker_counts()
+        
+                    print_worker_counts() # <- Movi para fora do cadeado (alinhado com o 'with')
 
                     if not task_queue.empty():
                         task = task_queue.get()

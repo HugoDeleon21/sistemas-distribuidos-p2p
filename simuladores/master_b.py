@@ -9,7 +9,7 @@ HOST = '0.0.0.0'
 PORT = 5001
 MASTER_ID = "MASTER_5"
 SERVER_UUID = MASTER_ID
-MASTER_ADDRESS = "127.0.0.1:5000"
+MASTER_ADDRESS = "127.0.0.1:5000" #Coloque aqui o IP do computador que está rodando este arquivo
 CAPACITY = 100
 RELEASE_THRESHOLD = 60
 
@@ -19,7 +19,7 @@ workers_na_farm = {}
 worker_connections = {}  # Mapeia worker_uuid -> socket para envio de comandos
 borrowed_workers = {}
 pending_help_requests = {}
-neighbors = {"MASTER_VIZINHO": "127.0.0.1:5001"}
+neighbors = {"MASTER_VIZINHO": "127.0.0.1:5001"} #Coloque aqui o IP e a porta do pc do outro grupo
 
 load_lock = threading.Lock()
 

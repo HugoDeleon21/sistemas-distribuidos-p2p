@@ -6,7 +6,9 @@ import shutil
 import uuid
 import master # Importa o seu código do Master para podermos acioná-lo depois!
 
-# ATENÇÃO: IP do Notebook
+# IP DO CHEFE: Coloque aqui o IP do Master ao qual este Worker pertence,
+# IMPORTANTE: Se você passar esse arquivo para o outro grupo rodar, 
+# eles devem colocar o IP do Master DELES aqui, e não o seu.
 MASTER_HOST = '127.0.0.1' 
 MASTER_PORT = 5001
 ELECTION_PORT = 5001
