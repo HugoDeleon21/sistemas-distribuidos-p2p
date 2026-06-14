@@ -1,0 +1,2 @@
+# No external dependencies required; standard library only
+psutil>=5.9.5

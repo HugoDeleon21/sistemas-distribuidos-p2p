@@ -4,12 +4,14 @@ import json
 import queue
 import time
 import uuid
+import metrics
+import supervisor_client
 
 HOST = '0.0.0.0'
 PORT = 5000
-MASTER_ID = "MASTER_5"
+MASTER_ID = "michel_1"
 SERVER_UUID = MASTER_ID
-MASTER_ADDRESS = "192.168.18.248:5000" #Coloque aqui o IP do computador que está rodando este arquivo.
+MASTER_ADDRESS = "127.0.0.1:5000" #Coloque aqui o IP do computador que está rodando este arquivo.
 CAPACITY = 100
 RELEASE_THRESHOLD = 60
 
@@ -19,7 +21,7 @@ workers_na_farm = {}
 worker_connections = {}  # Mapeia worker_uuid -> socket para envio de comandos
 borrowed_workers = {}
 pending_help_requests = {}
-neighbors = {"MASTER_VIZINHO": "192.168.18.20:5001"} #Coloque aqui o IP e a porta do pc do outro grupo
+neighbors = {"MASTER_VIZINHO": "127.0.0.1:5001"} #Coloque aqui o IP e a porta do pc do outro grupo
 
 load_lock = threading.Lock()
 
@@ -443,6 +445,48 @@ def request_help_to_neighbor(neighbor_id, addr_str, workers_needed):
 def start_master():
     monitor_thread = threading.Thread(target=load_monitor_loop, daemon=True)
     monitor_thread.start()
+
+    # Start periodic supervisor metrics emitter
+    print(f"[METRICS] === INICIANDO THREAD EMITTER ===")
+    try:
+        def _build_master_metrics():
+            print(f"[METRICS] _build_master_metrics() chamada")
+            with load_lock:
+                performance_extra = {
+                    "farm_state": {
+                        "workers": {
+                            "total_registered": len(workers_na_farm),
+                            "workers_borrowed": len(borrowed_workers),
+                            "workers_alive": len(workers_na_farm),
+                            "workers_idle": len([w for w in workers_na_farm.keys() if w not in borrowed_workers]),
+                        },
+                        "tasks": {
+                            "tasks_pending": task_queue.qsize(),
+                            "tasks_running": 0,
+                            "tasks_completed": 0,
+                        }
+                    },
+                    "config_thresholds": {"max_task": CAPACITY, "release_task": RELEASE_THRESHOLD}
+                }
+            perf = metrics.gather_system_metrics()
+            payload = metrics.build_payload(MASTER_ID, socket.gethostname(), "master", "performance_report", performance=perf, extra=performance_extra)
+            print(f"[METRICS] _build_master_metrics() retornando payload")
+            return payload
+
+        print(f"[METRICS] Criando emitter_thread...")
+        emitter_thread = threading.Thread(
+            target=supervisor_client.send_periodic,
+            args=(_build_master_metrics, 'nuted-ia.dev', 443),
+            kwargs={'interval': 10, 'use_tls': True, 'sni': 'nuted-ia.dev'},
+            daemon=True,
+        )
+        print(f"[METRICS] Iniciando emitter_thread...")
+        emitter_thread.start()
+        print(f"[METRICS] emitter_thread iniciada (daemon=True)")
+    except Exception as e:
+        print(f"[METRICS] ❌ Falha ao iniciar emitter: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.bind((HOST, 5000))
